@@ -129,7 +129,13 @@ def detect_changes(prev_img, curr_img, grid_size=500):
 
     # Tính hiệu ảnh
     diff = cv2.absdiff(prev_gray, curr_gray)
-    _, thresh = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
+
+    # _, thresh = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
+    thresh = cv2.adaptiveThreshold(diff, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+
+    # thêm morphological clean noise
+    kernel = np.ones((3, 3), np.uint8)
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
 
     square_w = grid_size / 8
     changes = []
@@ -188,15 +194,28 @@ def infer_move(board, changed_squares):
 
     return None, "No matching legal move found"
 
+def draw_grid(img, grid_size = 500, cells = 8):
+    step = grid_size // cells
+
+    # Doc
+    for i in range(cells + 1):
+        x = i*step
+        cv2.line(img, (x, 0), (x, grid_size), (255, 0, 0), 1)
+
+    for i in range(cells + 1):
+        y = i*step
+        cv2.line(img, (0, y), (grid_size, y), (0, 255, 0), 1)
+    return img
 
 # --- MAIN ---
 def main():
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture("chess_board.mp4")
 
     # Setup Windows
     cv2.namedWindow("Settings")
-    cv2.createTrackbar("Threshold", "Settings", 120, 300, nothing)
+    cv2.createTrackbar("Threshold", "Settings", 70, 300, nothing)
     cv2.createTrackbar("AngleDelta", "Settings", 20, 100, nothing)
+    cv2.createTrackbar("InnerPad", "Settings", 5, 100, nothing)
 
     # Chess Logic
     board = chess.Board()
@@ -218,6 +237,9 @@ def main():
     print("4. Rút tay ra, nhấn phím 'SPACE' để cập nhật.")
     print("5. Nhấn 'q' để thoát.")
     print("=================")
+
+
+    prev_M = None
 
     while True:
         ret, frame = cap.read()
@@ -271,9 +293,31 @@ def main():
                 cv2.drawContours(frame_resized, [approx], -1, (0, 255, 0), 2)
                 rect = order_points(approx.reshape(4, 2))
                 M = cv2.getPerspectiveTransform(rect, dst_pts)
+
+                # Stabilize transform matrix
+
+                if prev_M is None:
+                    prev_M = M
+                else:
+                    alpha = 0.85
+                    M = alpha * prev_M + (1 - alpha) * M
+                    prev_M = M
+
                 current_warped_img = cv2.warpPerspective(frame_resized, M, (WARPED_SIZE, WARPED_SIZE))
                 board_found = True
-                cv2.imshow("Warped View", current_warped_img)
+
+                pad_percent = cv2.getTrackbarPos("InnerPad", "Settings") / 100.0
+
+                pad = int(WARPED_SIZE * pad_percent / 2)
+
+                inner = current_warped_img[pad: WARPED_SIZE - pad, pad: WARPED_SIZE - pad]
+                inner = cv2.resize(inner, (WARPED_SIZE, WARPED_SIZE))
+
+                # thể hiện ra grid view
+                grid_view = draw_grid(inner.copy())
+                cv2.imshow("Warped View", grid_view)
+
+                current_warped_img = inner
 
         # --- 2. Xử lý phím bấm ---
         key = cv2.waitKey(1) & 0xFF
