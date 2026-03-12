@@ -4,7 +4,7 @@ Hệ thống nhận diện nước đi cờ vua từ camera bằng xử lý ản
 
 Project gồm 2 chế độ hoạt động:
 
-- `test_chess.py` → Tự động phát hiện bàn cờ bằng Hough Transform  
+- `test_chess.py` → Tự động phát hiện bàn cờ bằng Contour Analysis (findContours)
 - `test_chess_manualConner.py` → Hiệu chỉnh thủ công 4 góc (ổn định hơn)
 
 ---
@@ -16,8 +16,8 @@ Project gồm 2 chế độ hoạt động:
 Hệ thống sử dụng:
 
 - Canny Edge Detection
-- Hough Line Transform
-- Tìm giao điểm các đường
+- Contour Analysis (findContours)
+- Xấp xỉ đa giác để tìm 4 góc (approxPolyDP)
 - `cv2.getPerspectiveTransform`
 - Warp về góc nhìn top-down 8x8
 

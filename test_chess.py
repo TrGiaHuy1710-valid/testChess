@@ -96,21 +96,6 @@ def order_points(pts):
     return rect
 
 
-def intersection(line1, line2):
-    rho1, theta1 = line1
-    rho2, theta2 = line2
-    A = np.array([
-        [np.cos(theta1), np.sin(theta1)],
-        [np.cos(theta2), np.sin(theta2)]
-    ])
-    b = np.array([[rho1], [rho2]])
-    if abs(np.linalg.det(A)) < 1e-5: return None
-    try:
-        x0, y0 = np.linalg.solve(A, b)
-        return int(np.round(x0[0])), int(np.round(y0[0]))
-    except:
-        return None
-
 
 # --- LOGIC PHÁT HIỆN NƯỚC ĐI TỪ ẢNH ---
 
@@ -193,10 +178,7 @@ def infer_move(board, changed_squares):
 def main():
     cap = cv2.VideoCapture(0)
 
-    # Setup Windows
-    cv2.namedWindow("Settings")
-    cv2.createTrackbar("Threshold", "Settings", 120, 300, nothing)
-    cv2.createTrackbar("AngleDelta", "Settings", 20, 100, nothing)
+    # Set up logic variables
 
     # Chess Logic
     board = chess.Board()
@@ -212,7 +194,7 @@ def main():
     current_warped_img = None  # Lưu trạng thái hiện tại (để hiển thị)
 
     print("=== HƯỚNG DẪN ===")
-    print("1. Chỉnh camera và Threshold sao cho khung xanh bao trọn bàn cờ.")
+    print("1. Chỉnh camera sao cho toàn bộ bàn cờ nằm trong khung hình (hệ thống sẽ tự động bắt góc).")
     print("2. Nhấn phím 'i' (Init) để lưu trạng thái bàn cờ ban đầu.")
     print("3. Đi quân cờ thật.")
     print("4. Rút tay ra, nhấn phím 'SPACE' để cập nhật.")
@@ -231,49 +213,35 @@ def main():
 
         gray = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        edges = cv2.Canny(blurred, 50, 150)
+        # Dùng Canny và morphology để lấy đường viền liền mạch
+        edges = cv2.Canny(blurred, 30, 150)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        dilated = cv2.dilate(edges, kernel, iterations=1)
 
-        h_thresh = max(1, cv2.getTrackbarPos("Threshold", "Settings"))
-        a_delta = cv2.getTrackbarPos("AngleDelta", "Settings") / 100.0
+        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        lines = cv2.HoughLines(edges, 1, np.pi / 180, h_thresh)
-
-        # ... (Đoạn tìm giao điểm giữ nguyên như cũ để lấy rect) ...
-        points = []
-        if lines is not None:
-            vertical_lines = []
-            horizontal_lines = []
-            for line in lines:
-                rho, theta = line[0]
-                is_vertical = (theta < a_delta) or (abs(theta - np.pi) < a_delta)
-                is_horizontal = (abs(theta - np.pi / 2) < a_delta)
-                if is_vertical:
-                    vertical_lines.append((rho, theta))
-                elif is_horizontal:
-                    horizontal_lines.append((rho, theta))
-
-            if len(vertical_lines) > 0 and len(horizontal_lines) > 0:
-                for v in vertical_lines:
-                    for h in horizontal_lines:
-                        pt = intersection(v, h)
-                        if pt and 0 <= pt[0] < width and 0 <= pt[1] < height:
-                            points.append(pt)
-
-        # Warp bàn cờ nếu tìm thấy 4 điểm
         board_found = False
-        if len(points) >= 4:
-            pts = np.array(points, dtype=np.int32)
-            hull = cv2.convexHull(pts)
-            epsilon = 0.02 * cv2.arcLength(hull, True)
-            approx = cv2.approxPolyDP(hull, epsilon, True)
+        if contours:
+            # Lọc các contour lớn, sắp xếp theo diện tích giảm dần
+            contours = sorted(contours, key=cv2.contourArea, reverse=True)
+            for c in contours:
+                area = cv2.contourArea(c)
+                if area < 5000:  # Bỏ qua các hình quá nhỏ
+                    break
+                
+                peri = cv2.arcLength(c, True)
+                # Xấp xỉ đa giác
+                approx = cv2.approxPolyDP(c, 0.02 * peri, True)
 
-            if len(approx) == 4:
-                cv2.drawContours(frame_resized, [approx], -1, (0, 255, 0), 2)
-                rect = order_points(approx.reshape(4, 2))
-                M = cv2.getPerspectiveTransform(rect, dst_pts)
-                current_warped_img = cv2.warpPerspective(frame_resized, M, (WARPED_SIZE, WARPED_SIZE))
-                board_found = True
-                cv2.imshow("Warped View", current_warped_img)
+                # Nếu hình xấp xỉ có đúng 4 đỉnh, ta coi là bàn cờ
+                if len(approx) == 4:
+                    cv2.drawContours(frame_resized, [approx], -1, (0, 255, 0), 2)
+                    rect = order_points(approx.reshape(4, 2))
+                    M = cv2.getPerspectiveTransform(rect, dst_pts)
+                    current_warped_img = cv2.warpPerspective(frame_resized, M, (WARPED_SIZE, WARPED_SIZE))
+                    board_found = True
+                    cv2.imshow("Warped View", current_warped_img)
+                    break
 
         # --- 2. Xử lý phím bấm ---
         key = cv2.waitKey(1) & 0xFF
