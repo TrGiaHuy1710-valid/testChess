@@ -20,10 +20,12 @@ Hệ thống hoạt động theo 2 giai đoạn chính:
 - Áp dụng **Perspective Transform** (`cv2.getPerspectiveTransform` và `cv2.warpPerspective`) để bẻ cong (warp) góc nhìn của camera về dạng 2D top-down (nhìn từ trên xuống) với kích thước cố định (chia làm lưới 8x8).
 
 ### 2. Phát hiện & Suy luận nước đi (Move Detection & Inference)
-- **Chụp ảnh tham chiếu:** Nhấn một phím để lưu trạng thái bàn cờ hiện tại trước khi đi quản (`prev_warped_img`).
-- **So sánh ảnh:** Sau khi đi quân thực tế, lấy ảnh bàn cờ mới, tính độ chênh lệch tuyệt đối (**absdiff**) giữa 2 ảnh sau khi chuyển sang ảnh xám và làm mờ (Gaussian Blur).
-- **Phân tích từng ô:** Chia bức ảnh thành lưới 8x8, đếm số lượng pixel thay đổi (sau khi thresholding) ở mỗi ô. Hệ thống tìm ra các ô có sự thay đổi hình ảnh đáng kể nhất.
-- **Suy luận logic:** Dùng thư viện `python-chess` sinh ra tất cả các nước đi hợp lệ (legal moves) ở trạng thái hiện tại. So khớp xem nước đi nào có điểm bắt đầu (from_square) và điểm kết thúc (to_square) trùng khớp với các ô có hình ảnh thay đổi.
+
+- **Chụp ảnh tham chiếu & Cân chỉnh (Calibrate):** Khi nhấn 'i' (Init), hệ thống lưu lại ảnh gốc và dò lại chính xác các đường thẳng ngang dọc (`HoughLines`) của mặt phẳng bàn cờ để tạo ra bộ lưới `h_grid`, `v_grid`. Bộ lưới này giúp khắc phục hoàn toàn sự méo mó quang học (perspective distortion) của camera.
+- **So sánh ảnh:** Sau khi đi quân thực tế, lấy ảnh bàn cờ mới, tính độ chênh lệch tuyệt đối (**absdiff**) giữa 2 ảnh sau khi chuyển sang ảnh xám.
+- **Phân tích từng ô:** Chia bức ảnh thành lưới không đều dựa trên `h_grid`, `v_grid` tạo vòng trước, đếm số lượng pixel thay đổi (sau khi thresholding + OTSU) ở mỗi ô. Hệ thống tìm ra các ô có sự thay đổi hình ảnh đáng kể nhất.
+- **Suy luận logic:** Dùng thư viện `python-chess` sinh ra tất cả các nước đi hợp lệ (legal moves) ở trạng thái hiện tại. So khớp xem nước đi nào có điểm bắt đầu (from_square) và điểm kết thúc (to_square) trùng khớp với các ô.
+- **Lưu diễn biến chuẩn PGN:** Nước đi hợp lệ sẽ được ghi nhận vào Node (thử viện `chess.pgn`), cho phép theo dõi log và xuất file ván đấu toàn thư (`.pgn`).
 - **Cập nhật giao diện:** Thể hiện nước đi lên bàn cờ ảo UI (Virtual Board).
 
 ## 🛠️ Công nghệ sử dụng
@@ -51,7 +53,8 @@ python test_chess_manualConner.py
 
 **3. Thao tác điều khiển (trong quá trình chạy):**
 
-- **Phím 'i':** Khởi tạo (Init) - Lưu lại hình ảnh trạng thái bàn cờ ban đầu.
+- **Phím 'i':** Khởi tạo (Init) - Lưu lại hình ảnh trạng thái bàn cờ ban đầu và tự động *Calibrate* lưới ô cờ bên trong để triết tiêu sự phân sai phối cảnh.
 - **Đi quân:** Thực hiện nước đi trên bàn cờ thật, sau đó rút tay ra khỏi khung hình.
 - **Phím `SPACE`:** Xác nhận hệ thống phân tích và cập nhật nước đi vừa diễn ra.
+- **Phím 's':** Lưu lại lịch sử ván cờ vào file dạng văn bản chuẩn `game_recorded.pgn` trong thư mục project.
 - **Phím 'q':** Thoát chương trình.

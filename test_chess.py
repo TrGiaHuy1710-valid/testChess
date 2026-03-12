@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import chess
+import chess.pgn
 import os
 
 # --- CẤU HÌNH ---
@@ -99,33 +100,31 @@ def order_points(pts):
 
 # --- LOGIC PHÁT HIỆN NƯỚC ĐI TỪ ẢNH ---
 
-def detect_changes(prev_img, curr_img, grid_size=500):
+def detect_changes(prev_img, curr_img, h_grid, v_grid):
     """
-    So sánh 2 ảnh, trả về danh sách chỉ số ô (0-63) có sự thay đổi lớn nhất.
+    So sánh 2 ảnh dựa trên tọa độ lưới h_grid và v_grid đã được calibrate.
     """
     if prev_img is None or curr_img is None:
         return []
 
-    # Chuyển xám và làm mờ
+    # Chuyển xám
     prev_gray = cv2.cvtColor(prev_img, cv2.COLOR_BGR2GRAY)
     curr_gray = cv2.cvtColor(curr_img, cv2.COLOR_BGR2GRAY)
-    prev_gray = cv2.GaussianBlur(prev_gray, (5, 5), 0)
-    curr_gray = cv2.GaussianBlur(curr_gray, (5, 5), 0)
 
     # Tính hiệu ảnh
     diff = cv2.absdiff(prev_gray, curr_gray)
-    _, thresh = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
+    _, thresh = cv2.threshold(diff, 35, 255, cv2.THRESH_BINARY) 
 
-    square_w = grid_size / 8
     changes = []
+    
+    # Đảm bảo chỉ duyệt trong phạm vi số đường kẻ hiện có
+    rows = min(8, len(h_grid) - 1)
+    cols = min(8, len(v_grid) - 1)
 
-    # Duyệt qua 64 ô
-    for r in range(8):  # 0-7 (Top-Down in Image)
-        for c in range(8):  # 0-7 (Left-Right)
-            x_start = int(c * square_w)
-            y_start = int(r * square_w)
-            x_end = int((c + 1) * square_w)
-            y_end = int((r + 1) * square_w)
+    for r in range(rows):
+        for c in range(cols):
+            y_start, y_end = int(h_grid[r]), int(h_grid[r+1])
+            x_start, x_end = int(v_grid[c]), int(v_grid[c+1])
 
             # Đếm số pixel trắng (thay đổi) trong ô này
             roi = thresh[y_start:y_end, x_start:x_end]
@@ -135,9 +134,7 @@ def detect_changes(prev_img, curr_img, grid_size=500):
             if non_zero > 100:
                 # Mapping sang Chess Coordinate
                 # Ảnh: r=0 là trên cùng. Chess: rank=7 là trên cùng.
-                rank = 7 - r
-                file = c
-                sq_idx = chess.square(file, rank)
+                sq_idx = chess.square(c, 7 - r)
                 changes.append((sq_idx, non_zero))
 
     # Sắp xếp các ô thay đổi nhiều nhất lên đầu
@@ -180,6 +177,13 @@ def main():
 
     # Set up logic variables
 
+    # PGN Game tracking
+    game = chess.pgn.Game()
+    game.headers["Event"] = "CV Chess Game"
+    game.headers["White"] = "Player (Camera)"
+    game.headers["Black"] = "Player (Camera)"
+    node = game
+
     # Chess Logic
     board = chess.Board()
     visualizer = ChessVisualizer(piece_dir=ASSET_PATH, square_size=60)
@@ -193,55 +197,53 @@ def main():
     prev_warped_img = None  # Lưu trạng thái bàn cờ trước khi đi
     current_warped_img = None  # Lưu trạng thái hiện tại (để hiển thị)
 
+    h_grid = np.linspace(0, 500, 9) 
+    v_grid = np.linspace(0, 500, 9)
+
     print("=== HƯỚNG DẪN ===")
-    print("1. Chỉnh camera sao cho toàn bộ bàn cờ nằm trong khung hình (hệ thống sẽ tự động bắt góc).")
-    print("2. Nhấn phím 'i' (Init) để lưu trạng thái bàn cờ ban đầu.")
+    print("1. Chỉnh camera sao cho toàn bộ bàn cờ nằm trong khung hình (hệ thống sẽ bắt góc tự động).")
+    print("2. Nhấn phím 'i' (Init) để lưu trạng thái bàn cờ ban đầu và Calibrate khung cờ.")
     print("3. Đi quân cờ thật.")
     print("4. Rút tay ra, nhấn phím 'SPACE' để cập nhật.")
-    print("5. Nhấn 'q' để thoát.")
+    print("5. Nhấn phím 's' để lưu trận đấu thành file PGN.")
+    print("6. Nhấn 'q' để thoát.")
     print("=================")
 
     while True:
         ret, frame = cap.read()
         if not ret: break
 
-        # --- 1. Xử lý ảnh để tìm bàn cờ ---
-        scale_percent = 60
-        width = int(frame.shape[1] * scale_percent / 100)
-        height = int(frame.shape[0] * scale_percent / 100)
-        frame_resized = cv2.resize(frame, (width, height))  # Resize để hiển thị
-
-        gray = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        # Dùng Canny và morphology để lấy đường viền liền mạch
-        edges = cv2.Canny(blurred, 30, 150)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        dilated = cv2.dilate(edges, kernel, iterations=1)
-
-        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # --- 1. Xử lý ảnh để tìm bàn cờ (Tiền xử lý nâng cao) ---
+        # Fixed scale resolution cho quá trình calibrate sau này dễ xử lý
+        img_res = cv2.resize(frame, (800, 600))
+        gray = cv2.cvtColor(img_res, cv2.COLOR_BGR2GRAY)
+        
+        # Tăng tương phản bằng CLAHE
+        clahe = cv2.createCLAHE(2.0, (8,8))
+        contrast = clahe.apply(gray)
+        # Sử dụng OTSU để tự động tìm Threshold tốt cho viền
+        _, thresh_img = cv2.threshold(contrast, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        thresh_img = cv2.bitwise_not(thresh_img)
+        
+        contours, _ = cv2.findContours(thresh_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         board_found = False
         if contours:
-            # Lọc các contour lớn, sắp xếp theo diện tích giảm dần
-            contours = sorted(contours, key=cv2.contourArea, reverse=True)
-            for c in contours:
-                area = cv2.contourArea(c)
-                if area < 5000:  # Bỏ qua các hình quá nhỏ
-                    break
+            largest_contour = max(contours, key=cv2.contourArea)
+            if cv2.contourArea(largest_contour) > 5000:
+                peri = cv2.arcLength(largest_contour, True)
+                approx = cv2.approxPolyDP(largest_contour, 0.02 * peri, True)
                 
-                peri = cv2.arcLength(c, True)
-                # Xấp xỉ đa giác
-                approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-
                 # Nếu hình xấp xỉ có đúng 4 đỉnh, ta coi là bàn cờ
                 if len(approx) == 4:
-                    cv2.drawContours(frame_resized, [approx], -1, (0, 255, 0), 2)
+                    cv2.drawContours(img_res, [approx], -1, (0, 255, 0), 2)
                     rect = order_points(approx.reshape(4, 2))
                     M = cv2.getPerspectiveTransform(rect, dst_pts)
-                    current_warped_img = cv2.warpPerspective(frame_resized, M, (WARPED_SIZE, WARPED_SIZE))
+                    current_warped_img = cv2.warpPerspective(img_res, M, (WARPED_SIZE, WARPED_SIZE))
                     board_found = True
                     cv2.imshow("Warped View", current_warped_img)
-                    break
+
+        frame_resized = img_res
 
         # --- 2. Xử lý phím bấm ---
         key = cv2.waitKey(1) & 0xFF
@@ -249,11 +251,41 @@ def main():
         if key == ord('q'):
             break
 
-        # Phím 'i': Khởi tạo (Lưu ảnh ban đầu)
+        # Phím 'i': Khởi tạo (Lưu ảnh ban đầu và Calibrate Grid)
         elif key == ord('i'):
             if board_found:
                 prev_warped_img = current_warped_img.copy()
-                print("-> Đã lưu trạng thái bàn cờ ban đầu (Ready).")
+                
+                # Thực hiện Calibrate Grid
+                warp_gray = cv2.cvtColor(prev_warped_img, cv2.COLOR_BGR2GRAY)
+                edges_w = cv2.Canny(warp_gray, 50, 150)
+                lines_w = cv2.HoughLines(edges_w, 1, np.pi/180, 110) # Dò lại đường thẳng bên trong bàn cờ phẳng
+                
+                h_lines, v_lines = [], []
+                if lines_w is not None:
+                    for l in lines_w:
+                        rho, theta = l[0]
+                        if np.pi/4 < theta < 3*np.pi/4: h_lines.append(rho)
+                        else: v_lines.append(rho)
+
+                def cluster_lines(data, max_val):
+                    data.sort()
+                    if not data: return np.linspace(0, max_val, 9).tolist()
+                    res = [data[0]]
+                    for i in range(1, len(data)):
+                        if abs(data[i] - data[i-1]) > 40: # Khoảng cách tối thiểu giữa 2 đường kẻ phải > 40px
+                            res.append(data[i])
+                    
+                    # Nếu thuật toán Calibrate không tìm đủ 8 ô (9 đường viền), fall back về chia đều tránh lỗi.
+                    if len(res) != 9:
+                        return np.linspace(0, max_val, 9).tolist()
+                    return res
+
+                # Gom nhóm lưới thực tế
+                h_grid = cluster_lines(h_lines, WARPED_SIZE)
+                v_grid = cluster_lines(v_lines, WARPED_SIZE)
+                
+                print(f"-> Đã khởi tạo và Calibrate đường kẻ (H={len(h_grid)}, V={len(v_grid)}). (Ready)")
             else:
                 print("-> Lỗi: Không tìm thấy bàn cờ để khởi tạo.")
 
@@ -266,7 +298,7 @@ def main():
             else:
                 print("Processing move...")
                 # 1. Tìm các ô thay đổi
-                changes = detect_changes(prev_warped_img, current_warped_img)
+                changes = detect_changes(prev_warped_img, current_warped_img, h_grid, v_grid)
 
                 # 2. Suy luận nước đi
                 move, msg = infer_move(board, changes)
@@ -277,12 +309,17 @@ def main():
                     piece_name = piece.symbol() if piece else "Unknown"
                     color_name = "White" if piece and piece.color == chess.WHITE else "Black"
 
-                    # Cập nhật bàn cờ ảo
+                    # Cập nhật bàn cờ ảo và Game Node
                     board.push(move)
+                    node = node.add_variation(move)
 
-                    # In thông tin
-                    print(
-                        f"-> MOVE DETECTED: {color_name} {piece_name} moved {chess.square_name(move.from_square)} -> {chess.square_name(move.to_square)}")
+                    # In thông tin Nước đi và PGN
+                    print(f"-> MOVE DETECTED: {color_name} {piece_name} moved {chess.square_name(move.from_square)} -> {chess.square_name(move.to_square)}")
+                    
+                    # Cập nhật lịch sử ra terminal
+                    exporter = chess.pgn.StringExporter(headers=False, variations=True, comments=True)
+                    pgn_string = game.accept(exporter)
+                    print(f"[PGN Current]: {pgn_string}\n")
 
                     # Kiểm tra game over
                     if board.is_game_over():
@@ -294,6 +331,16 @@ def main():
                 else:
                     print(f"-> Cannot detect move: {msg}")
                     print(f"   Changed squares indices: {changes}")
+
+        # Phím 's': Lưu file PGN
+        elif key == ord('s'):
+            try:
+                with open("game_recorded.pgn", "w", encoding="utf-8") as f:
+                    exporter = chess.pgn.FileExporter(f)
+                    game.accept(exporter)
+                print("-> SUCCESS: Đã lưu ván cờ vào file 'game_recorded.pgn'!")
+            except Exception as e:
+                print(f"-> ERROR: Không thể lưu file PGN: {e}")
 
         # --- 3. Hiển thị ---
         last_move = board.peek() if len(board.move_stack) > 0 else None

@@ -18,8 +18,9 @@ Hệ thống sử dụng:
 - Canny Edge Detection
 - Contour Analysis (findContours)
 - Xấp xỉ đa giác để tìm 4 góc (approxPolyDP)
-- `cv2.getPerspectiveTransform`
-- Warp về góc nhìn top-down 8x8
+- Áp dụng **Perspective Transform** (`cv2.getPerspectiveTransform`)
+- Bấm (i) Init: Xử lý lưới không đều `h_grid, v_grid` để bù trừ hiện tượng méo quang học bằng `HoughLines`.
+- Warp về góc nhìn top-down với lưới biến dạng khớp với thực tế.
 
 ---
 
@@ -30,9 +31,10 @@ Quy trình:
 1. Lưu ảnh bàn cờ trước khi đi
 2. So sánh với ảnh sau khi đi
 3. Tính `absdiff`
-4. Threshold nhị phân
-5. Đếm pixel thay đổi theo từng ô
+4. Threshold nhị phân (có sử dụng OTSU)
+5. Lấy vùng theo lưới `h_grid, v_grid` đã căn chỉnh, đếm pixel thay đổi theo từng ô
 6. So khớp với nước đi hợp lệ từ thư viện `python-chess`
+7. (Tùy chọn) Ghi chép lịch sử vào file `.pgn` tiêu chuẩn.
 
 ---
 
