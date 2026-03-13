@@ -108,9 +108,9 @@ def detect_move_robust(prev, curr, grid_size=400):
 
 
 def main():
-    global calibration_points  # <--- SỬA LỖI Ở ĐÂY: Khai báo sử dụng biến toàn cục
+    global calibration_points  # <--- SỬA LỖI Ở ĐÂY: Khai báo sử dụng biến toàn cụcq
 
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture("chess_move.mp4")
     # Tùy chỉnh độ phân giải camera nếu cần
     # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
