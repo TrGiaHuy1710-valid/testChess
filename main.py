@@ -24,7 +24,10 @@ def main():
     # ==========================================
     # INITIALIZE COMPONENTS
     # ==========================================
-    cap = cv2.VideoCapture(0)
+    
+    path = r"E:\Python_Project\chessboard_move.mp4"
+
+    cap = cv2.VideoCapture(path)
     
     if not cap.isOpened():
         print("❌ Cannot open camera")
@@ -58,7 +61,7 @@ def main():
         
         # Frame rate control
         if current_time - last_time < frame_time:
-            time.sleep(0.001)
+            time.sleep(0.1)
             continue
         
         last_time = current_time
@@ -73,6 +76,8 @@ def main():
             print("❌ Failed to read frame from camera")
             break
         
+
+        frame = cv2.flip(frame, -1)  # Mirror image for better user experience
         # ==========================================
         # PROCESS BOARD (DETECT + WARP)
         # ==========================================
