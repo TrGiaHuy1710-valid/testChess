@@ -117,8 +117,8 @@ def main():
         fps = max(1, int(frame_count / max(1, current_time - last_time)))
         cv2.putText(camera_display, f"FPS: {fps}", (10, 30),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(warped_display, f"Board: {detector.board}", (5, 30),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+        # cv2.putText(warped_display, f"Board: {detector.board}", (5, 30),
+        #            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
         cv2.putText(chess_display, f"Moves: {len(detector.board.move_stack)}", (5, 30),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         
