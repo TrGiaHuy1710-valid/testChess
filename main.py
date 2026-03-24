@@ -59,13 +59,17 @@ def main():
     while True:
         current_time = time.time()
         
-        # Frame rate control
-        if current_time - last_time < frame_time:
-            time.sleep(0.1)
-            continue
+        # # Frame rate control
+        # if current_time - last_time < frame_time:
+        #     time.sleep(0.1)
+        #     continue
         
-        last_time = current_time
-        frame_count += 1
+        # last_time = current_time
+        # frame_count += 1
+
+        # Hãy dùng waitKey linh hoạt:
+        delay = int(max(1, (frame_time - (current_time - last_time)) * 1000))
+        key = cv2.waitKey(delay) & 0xFF
         
         # ==========================================
         # READ FRAME FROM CAMERA
@@ -95,7 +99,7 @@ def main():
         # GET VISUAL OUTPUTS
         # ==========================================
         # 1. Camera with board outline
-        camera_display = frame.copy()
+        camera_display = cv2.resize(frame.copy(), (640, 480))
         if processor.last_board_contour is not None:
             camera_display = draw_board_outline(camera_display, processor.last_board_contour)
         
@@ -172,4 +176,5 @@ def main():
     print("✅ Done!")
 
 if __name__ == "__main__":
+    os.remove(r"E:\Python_Project\Realsense\test\inner_pts.npy")
     main()
