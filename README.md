@@ -68,9 +68,13 @@ graph TD
     3.  **Chess Visual**: Đại diện bàn cờ 2D đã số hóa.
     4.  **Diff Detection**: Bản đồ nhiệt nhị phân (binary heatmap) của chuyển động.
 
+
 ---
 
 ## 🎮 Phím điều khiển (Controls)
+
+### 4. Thực thi (`main.py`)
+* VideoCapture với path hoặc là camera
 
 | Phím | Hành động |
 | :--- | :--- |
