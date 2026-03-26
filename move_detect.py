@@ -202,19 +202,30 @@ class MoveDetector:
         if len(changed_squares) < 2:
             return None, "Not enough changes"
 
-        top_changes = changed_squares[:4]
+        top_changes = set(changed_squares[:6])
         legal_moves = list(self.board.legal_moves)
-        possible_moves = []
+        scored_moves = []
 
         for mv in legal_moves:
-            if mv.from_square in top_changes and mv.to_square in top_changes:
-                possible_moves.append(mv)
+            expected = self._expected_squares_for_move(mv)
+            # Count how many expected squares appear in top changes
+            matched = expected & top_changes
+            if len(matched) >= 2 and mv.from_square in top_changes and mv.to_square in top_changes:
+                # Score: more matched expected squares = better fit
+                score = len(matched)
+                scored_moves.append((mv, score))
 
-        if len(possible_moves) == 1:
-            return possible_moves[0], "Success"
-        if len(possible_moves) > 1:
-            return possible_moves[0], "Ambiguous, picked best match"
-        return None, "No matching legal move"
+        if not scored_moves:
+            return None, "No matching legal move"
+
+        # Sort by match score descending
+        scored_moves.sort(key=lambda x: x[1], reverse=True)
+
+        if len(scored_moves) == 1:
+            return scored_moves[0][0], "Success"
+        if scored_moves[0][1] > scored_moves[1][1]:
+            return scored_moves[0][0], "Success (best score)"
+        return scored_moves[0][0], "Ambiguous, picked best match"
 
     # =========================
     # ACTIONS
@@ -250,8 +261,11 @@ class MoveDetector:
         if len(self.board.move_stack) > 0:
             self.board.pop()
             self._rebuild_game()
-            self.last_status = "Undo"
-            print("Undo")
+            # Reset prev_img to curr_img to avoid desync
+            if self.curr_img is not None:
+                self.prev_img = self.curr_img.copy()
+            self.last_status = "Undo (press 'i' to re-sync)"
+            print("Undo — press 'i' after restoring the board to re-sync")
 
     # =========================
     # VISUALS

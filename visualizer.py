@@ -1,3 +1,4 @@
+import os
 import chess
 import chess.svg
 import cv2

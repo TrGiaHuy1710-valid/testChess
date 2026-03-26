@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import sys
 from board_process_en_new import ChessBoardProcessor
 from move_detect import MoveDetector
 import time
@@ -24,13 +25,13 @@ def main():
     # ==========================================
     # INITIALIZE COMPONENTS
     # ==========================================
-    
-    path = r"E:\Python_Project\chessboard_move.mp4"
+    # Video source: command line argument, or fallback to camera 0
+    path = sys.argv[1] if len(sys.argv) > 1 else 0
 
     cap = cv2.VideoCapture(path)
     
     if not cap.isOpened():
-        print("❌ Cannot open camera")
+        print(f"❌ Cannot open video source: {path}")
         return
     
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
@@ -40,8 +41,7 @@ def main():
     detector = MoveDetector()
     
     # Frame rate control
-    frame_time = 1.0 / 30  # 30 FPS target
-    last_time = 0
+    start_time = time.time()
     frame_count = 0
     last_warped_board = None  # Store last processed board
     
@@ -58,18 +58,7 @@ def main():
     
     while True:
         current_time = time.time()
-        
-        # # Frame rate control
-        # if current_time - last_time < frame_time:
-        #     time.sleep(0.1)
-        #     continue
-        
-        # last_time = current_time
-        # frame_count += 1
-
-        # Hãy dùng waitKey linh hoạt:
-        delay = int(max(1, (frame_time - (current_time - last_time)) * 1000))
-        key = cv2.waitKey(delay) & 0xFF
+        frame_count += 1
         
         # ==========================================
         # READ FRAME FROM CAMERA
@@ -99,9 +88,18 @@ def main():
         # GET VISUAL OUTPUTS
         # ==========================================
         # 1. Camera with board outline
-        camera_display = cv2.resize(frame.copy(), (640, 480))
+        camera_display = frame.copy()
+        orig_h, orig_w = frame.shape[:2]
+        display_w, display_h = 640, 480
         if processor.last_board_contour is not None:
-            camera_display = draw_board_outline(camera_display, processor.last_board_contour)
+            # Scale contour coordinates to match display size
+            scale_x = display_w / orig_w
+            scale_y = display_h / orig_h
+            scaled_contour = (processor.last_board_contour.astype(np.float64) * [scale_x, scale_y]).astype(np.int32)
+            camera_display = cv2.resize(camera_display, (display_w, display_h))
+            camera_display = draw_board_outline(camera_display, scaled_contour)
+        else:
+            camera_display = cv2.resize(camera_display, (display_w, display_h))
         
         # 2. Warped board with grid overlay
         if last_warped_board is not None:
@@ -118,7 +116,8 @@ def main():
         diff_display = detector.get_diff_image()
         
         # Add info text to displays
-        fps = max(1, int(frame_count / max(1, current_time - last_time)))
+        elapsed = current_time - start_time
+        fps = max(1, int(frame_count / max(1, elapsed)))
         cv2.putText(camera_display, f"FPS: {fps}", (10, 30),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         # cv2.putText(warped_display, f"Board: {detector.board}", (5, 30),
@@ -176,5 +175,4 @@ def main():
     print("✅ Done!")
 
 if __name__ == "__main__":
-    os.remove(r"E:\Python_Project\Realsense\test\inner_pts.npy")
     main()
