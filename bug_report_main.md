@@ -34,6 +34,7 @@
 **Vấn đề**: `_expected_squares_for_move()` đã viết nhưng không được gọi → castling/en passant có thể detect sai.
 
 **Cách sửa**: Viết lại `infer_move()`:
+
 - Mở rộng top changes từ 4 → **6 ô** (vì castling thay đổi 4 ô)
 - Dùng `_expected_squares_for_move(mv)` để tính tập ô kỳ vọng
 - **Scoring**: match count (`len(expected ∩ top_changes)`) → nước đi khớp nhiều ô nhất thắng
@@ -113,3 +114,16 @@
 | 8 | Thiếu `import os` | `visualizer.py` | ✅ Đã sửa |
 
 > ⚠️ **Lưu ý về Bug 1**: Dù đã sửa code, user vẫn phải **đặt lại quân trên bàn thật** trước khi nhấn `'i'` sau khi undo. Code chỉ giúp tránh crash/detect sai, nhưng không thể tự động đặt lại quân vật lý.
+
+## Bug 9: Lỗi checkmate/stalemate
+
+confirm_move()
+ không kiểm tra board.is_game_over() → sau checkmate/stalemate, legal_moves rỗng → mọi lần nhấn SPACE đều trả "No matching legal move" mà không giải thích lý do.
+
+Fix đã áp dụng tại
+
+move_detect.py
+:
+
+Đầu hàm: Nếu game đã kết thúc → từ chối detect, in thông báo rõ ràng
+Sau khi push move: Kiểm tra game over và phân loại lý do (Checkmate / Stalemate / Insufficient material / Fifty-move rule / Threefold repetition), cập nhật last_status hiển thị trên grid overlay
