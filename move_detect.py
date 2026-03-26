@@ -231,6 +231,12 @@ class MoveDetector:
     # ACTIONS
     # =========================
     def confirm_move(self):
+        if self.board.is_game_over():
+            result = self.board.result()
+            self.last_status = f"Game Over: {result}"
+            print(f"⚠️ Game already over: {result}")
+            return None
+
         if self.prev_img is None or self.curr_img is None:
             self.last_status = "Need initialization"
             print("Need more frames")
@@ -255,6 +261,24 @@ class MoveDetector:
 
         print(f"Move accepted: {move.uci()} ({san})")
         print(self.get_pgn_string())
+
+        # Check game over after move
+        if self.board.is_game_over():
+            result = self.board.result()
+            reason = ""
+            if self.board.is_checkmate():
+                reason = "Checkmate"
+            elif self.board.is_stalemate():
+                reason = "Stalemate"
+            elif self.board.is_insufficient_material():
+                reason = "Insufficient material"
+            elif self.board.is_fifty_moves():
+                reason = "Fifty-move rule"
+            elif self.board.is_repetition():
+                reason = "Threefold repetition"
+            self.last_status = f"Game Over: {reason} ({result})"
+            print(f"🏁 GAME OVER — {reason}: {result}")
+
         return move
 
     def undo(self):
