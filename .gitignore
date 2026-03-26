@@ -3,3 +3,5 @@ __pycache__/
 
 chessboard_move.mp4
 
+*.pgn
+*.npy
