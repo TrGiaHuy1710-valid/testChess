@@ -1,6 +1,6 @@
 # 🎮 Logic Chi Tiết — `main.py` (Entry Point Modular)
 
-> File điều phối chính, **kết nối tất cả module** lại với nhau. Đây là nơi giải thích rõ nhất cách các file `board_process_en_new.py`, `move_detect.py`, và `visualizer.py` phối hợp.
+> File điều phối chính, **kết nối tất cả module**. Bao gồm camera retry, auto-detect, flip board, preview arrow.
 
 ---
 
@@ -14,13 +14,13 @@ graph TD
         SPGN["save_pgn()"]
     end
 
+    subgraph "config.py [MỚI]"
+        CFG["CFG singleton"]
+    end
+
     subgraph "board_process_en_new.py"
         CBP["ChessBoardProcessor"]
-        PF["process_frame()"]
-        GBA["get_board_contour_auto()"]
-        OP_B["order_points()"]
-        COS["calculate_optimal_side()"]
-        SSIP["select_and_save_inner_points()"]
+        PF["process_frame()<br>+ EMA, frame skip"]
     end
 
     subgraph "move_detect.py"
@@ -29,32 +29,36 @@ graph TD
         SRF["set_reference_frame()"]
         CM["confirm_move()"]
         UNDO["undo()"]
-        DG["draw_grid()"]
-        GVB["get_visual_board()"]
+        DG["draw_grid() + preview"]
+        GVB["get_visual_board() — cached"]
         GDI["get_diff_image()"]
+        UP["update_preview()"]
+        CAD["check_auto_detect()"]
     end
 
     subgraph "visualizer.py"
-        BTI["board_to_image()"]
+        CV["ChessVisualizer<br>(PNG assets)"]
     end
 
+    CFG --> CBP
+    CFG --> MD
+    CFG --> CV
     MAIN -->|"Khởi tạo"| CBP
     MAIN -->|"Khởi tạo"| MD
     MAIN -->|"Mỗi frame"| PF
-    PF --> GBA
-    PF --> OP_B
-    PF --> COS
-    PF --> SSIP
     PF -->|"warped_board"| UF
+    UF --> UP
+    UP --> CAD
     MAIN -->|"Phím 'i'"| SRF
     MAIN -->|"Phím Space"| CM
     MAIN -->|"Phím 'r'"| UNDO
+    MAIN -->|"Phím 'f'"| MD
+    MAIN -->|"Phím 'a'"| CFG
     MAIN -->|"Phím 'q'"| SPGN
-    MAIN -->|"Hiển thị 1"| DBO
-    MAIN -->|"Hiển thị 2"| DG
-    MAIN -->|"Hiển thị 3"| GVB
-    GVB --> BTI
-    MAIN -->|"Hiển thị 4"| GDI
+    MAIN -->|"Hiển thị"| DG
+    MAIN -->|"Hiển thị"| GVB
+    GVB --> CV
+    MAIN -->|"Hiển thị"| GDI
 ```
 
 ---
@@ -64,29 +68,16 @@ graph TD
 ```python
 import cv2
 import numpy as np
+import sys              # [MỚI] Dùng sys.argv cho video path
 import time
-import os
-
-# ========== TÍCH HỢP MODULE ==========
 
 from board_process_en_new import ChessBoardProcessor
-# → Dùng class ChessBoardProcessor để:
-#   1. Auto-detect bàn cờ trong camera frame (CLAHE + OTSU + Contour)
-#   2. Perspective Transform 2 lần (outer → inner) → ảnh warped phẳng
-#   3. Lưu/load inner_pts.npy cho calibration
-
 from move_detect import MoveDetector
-# → Dùng class MoveDetector để:
-#   1. Calibrate grid (HoughLines hoặc linspace)
-#   2. Detect changes (pixel-diff: absdiff → threshold → count per cell)
-#   3. Infer move (match changed squares vs legal_moves)
-#   4. Quản lý game state (chess.Board + PGN tree)
-#   5. Render visual outputs (draw_grid, get_diff_image)
-#
-# MoveDetector bên trong import từ visualizer:
-#   from visualizer import board_to_image
-#   → Dùng board_to_image() để render bàn cờ SVG → OpenCV image
+from config import CFG  # [MỚI] Thông số tập trung
 ```
+
+**Không còn import**:
+- ~~`import os`~~ — không dùng trực tiếp trong main
 
 ---
 
@@ -94,46 +85,11 @@ from move_detect import MoveDetector
 
 ### `draw_board_outline(frame, board_contour)`
 
-**Mục đích**: Vẽ bounding box xanh lá lên camera frame để user thấy hệ thống đang track bàn cờ ở đâu.
-
-**Tham số**:
-- `frame`: ảnh camera BGR `(H, W, 3)` — **bị sửa trực tiếp** (in-place)
-- `board_contour`: `numpy array (4, 1, 2)` hoặc `None`
-
-**Trả về**: `frame` (cùng object, đã vẽ contour)
-
-**Tích hợp**: Dùng `processor.last_board_contour` — thuộc tính được `ChessBoardProcessor.get_board_contour_auto()` cập nhật mỗi frame.
-
-```python
-if board_contour is not None:
-    cv2.drawContours(frame, [board_contour], 0, (0, 255, 0), 3)
-    # [board_contour]: list chứa 1 contour
-    # 0: vẽ contour thứ 0
-    # (0, 255, 0): màu xanh lá (BGR)
-    # 3: độ dày nét vẽ
-return frame
-```
-
----
+Vẽ bounding box xanh lá lên camera frame. *(Không thay đổi.)*
 
 ### `save_pgn(game, filename="game.pgn")`
 
-**Mục đích**: Lưu ván cờ ra file PGN.
-
-**Tham số**:
-- `game`: `chess.pgn.Game` — object PGN từ `detector.game`
-- `filename`: tên file output
-
-**Tích hợp**: Dùng `detector.game` — thuộc tính PGN game tree của `MoveDetector`, được cập nhật mỗi khi `confirm_move()` thành công.
-
-```python
-try:
-    with open(filename, "w") as f:
-        f.write(str(game))
-        # str(game) → chuỗi PGN đầy đủ (headers + moves)
-except Exception as e:
-    print(f"❌ Failed to save PGN: {e}")
-```
+Lưu ván cờ ra file PGN. *(Không thay đổi.)*
 
 ---
 
@@ -142,294 +98,226 @@ except Exception as e:
 ### Giai đoạn 1: Khởi Tạo
 
 ```python
-# ===== VIDEO SOURCE =====
-path = r"E:\Python_Project\chessboard_move.mp4"  # ⚠️ Hardcoded path
+# Video source: command line argument hoặc camera 0
+path = sys.argv[1] if len(sys.argv) > 1 else 0
+
 cap = cv2.VideoCapture(path)
-# Có thể đổi thành: cap = cv2.VideoCapture(0) cho camera thực
+if not cap.isOpened():
+    print(f"❌ Cannot open video source: {path}")
+    return
 
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, CFG.display_width)   # Dùng config (640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CFG.display_height)  # Dùng config (480)
 
-# ===== KHỞI TẠO 2 MODULE CHÍNH =====
+processor = ChessBoardProcessor()  # + EMA, frame skip, cached CLAHE
+detector = MoveDetector()          # + cached visual, auto-detect, flip
 
-processor = ChessBoardProcessor()
-# → Tạo instance board_process_en_new.ChessBoardProcessor
-# → Auto-load inner_pts.npy nếu có (trong __init__)
-# → Thuộc tính quan trọng:
-#     processor.inner_pts     — 4 góc inner (load từ file hoặc None)
-#     processor.wrap_size     — kích thước ảnh warp (tính lần đầu)
-#     processor.last_board_contour — contour gần nhất (để vẽ bounding box)
-
-detector = MoveDetector()
-# → Tạo instance move_detect.MoveDetector
-# → Khởi tạo:
-#     detector.board      — chess.Board() (trạng thái ban đầu)
-#     detector.game       — chess.pgn.Game() (PGN tree rỗng)
-#     detector.h_grid     — linspace(0, 500, 9) (grid mặc định)
-#     detector.prev_img   — None (chưa có ảnh tham chiếu)
-#     detector.curr_img   — None
-#
-# MoveDetector.__init__ cũng khởi tạo:
-#   → import board_to_image từ visualizer.py (SVG renderer)
-
-# ===== BIẾN CỤC BỘ =====
-frame_time = 1.0 / 30        # Target 30 FPS
-last_warped_board = None      # Cache ảnh warped gần nhất
-                               # (dùng khi processor trả về None ở 1 frame)
+start_time = time.time()
+frame_count = 0
+last_warped_board = None
+retry_count = 0  # [S3] Camera retry counter
 ```
 
 **Sơ đồ khởi tạo**:
 ```
 main.py
-  ├─ ChessBoardProcessor()  ← board_process_en_new.py
-  │     └─ load inner_pts.npy (nếu có)
-  │
-  └─ MoveDetector()          ← move_detect.py
+  ├─ config.py (CFG)           ← Thông số tập trung
+  ├─ ChessBoardProcessor()     ← board_process_en_new.py
+  │     ├─ load inner_pts.npy
+  │     ├─ cache CLAHE object
+  │     └─ EMA + frame skip state
+  └─ MoveDetector()            ← move_detect.py
         ├─ chess.Board()
         ├─ chess.pgn.Game()
-        └─ import board_to_image  ← visualizer.py
-              └─ import cairosvg
+        ├─ ChessVisualizer()   ← visualizer.py (PNG assets)
+        └─ auto-detect + flip state
 ```
 
 ---
 
-### Giai đoạn 2: Vòng Lặp Chính (Mỗi Frame)
+### Giai đoạn 2: Vòng Lặp Chính
+
+#### Bước 2a: Đọc Frame + Camera Retry [S3]
 
 ```python
-while True:
-    # === FRAME RATE CONTROL ===
-    if current_time - last_time < frame_time:
-        time.sleep(0.1)   # Chờ nếu quá nhanh
-        continue
+ret, frame = cap.read()
 
-    # === ĐỌC FRAME ===
-    ret, frame = cap.read()
-    frame = cv2.flip(frame, -1)  # Lật 180° (camera ngược)
+# [S3] Error handling — retry thay vì crash
+if not ret:
+    retry_count += 1
+    if retry_count > CFG.camera_retry_limit:  # 30 frame ≈ 1 giây
+        print("❌ Camera disconnected")
+        save_pgn(detector.game, f"game_{int(current_time)}.pgn")
+        break  # Auto-save PGN trước khi thoát
+    continue
+retry_count = 0
+# TRƯỚC: if not ret: break (mất game data)
+# SAU:   Retry tối đa 30 frame, auto-save nếu thất bại
+
+frame = cv2.flip(frame, -1)  # Lật 180° (camera ngược)
 ```
 
-#### Bước 2a: Board Detection + Warp (→ `board_process_en_new.py`)
+#### Bước 2b: Board Detection + Move Pipeline
 
 ```python
 warped_board = processor.process_frame(frame)
-# ┌─────────────────────────────────────────────────────────────┐
-# │ BÊN TRONG processor.process_frame(frame):                   │
-# │                                                               │
-# │  1. get_board_contour_auto(frame)                            │
-# │     → Grayscale → CLAHE → OTSU → findContours → approxPoly  │
-# │     → Trả về 4 đỉnh contour hoặc None                       │
-# │     → Lưu vào processor.last_board_contour (để vẽ bbox)      │
-# │                                                               │
-# │  2. calculate_optimal_side() (chỉ lần đầu)                   │
-# │     → Tính wrap_size từ cạnh dài nhất contour                │
-# │                                                               │
-# │  3. order_points() → sắp xếp 4 góc [TL, TR, BR, BL]         │
-# │                                                               │
-# │  4. Perspective Transform lần 1 (M1)                          │
-# │     → Warp frame → ảnh vuông (còn viền gỗ)                   │
-# │                                                               │
-# │  5. select_and_save_inner_points() (chỉ lần đầu nếu chưa có)│
-# │     → GUI click 4 góc inner → lưu inner_pts.npy              │
-# │                                                               │
-# │  6. Perspective Transform lần 2 (M2)                          │
-# │     → Warp theo inner_pts → ảnh vuông CHỈ có 64 ô            │
-# │                                                               │
-# │  Return: final_board (H, W, 3) hoặc None                     │
-# └─────────────────────────────────────────────────────────────┘
+# → Bên trong: frame skip, EMA stabilization, cached transform
 
 if warped_board is not None:
-    last_warped_board = warped_board.copy()  # Cache lại
+    last_warped_board = warped_board.copy()
 
-    # === TRUYỀN KẾT QUẢ SANG move_detect.py ===
     detector.update_frame(warped_board)
-    # ┌─────────────────────────────────────────────────┐
-    # │ BÊN TRONG detector.update_frame(warped_board):  │
-    # │                                                   │
-    # │  - Lần đầu: calibrate_grid() → linspace 8×8      │
-    # │  - Luôn: self.curr_img = warped_board.copy()      │
-    # │  - prev_img KHÔNG đổi (chỉ đổi khi confirm_move) │
-    # └─────────────────────────────────────────────────┘
+    # → Cập nhật curr_img (grid Hough được bảo vệ bởi L5)
+
+    # [F2] Cập nhật preview move
+    detector.update_preview()
+    # → Dựa trên diff hiện tại → suy luận nước đi → _preview_move
+    # → draw_grid() sẽ vẽ mũi tên cam từ ô đi → ô đến
+
+    # [F1] Auto-detect: tự động confirm khi ổn định
+    if detector.check_auto_detect():
+        move = detector.confirm_move()
+        if move:
+            print(f"🤖 Auto-detected: {move.uci()}")
 ```
 
-**Luồng dữ liệu Board → Detector**:
-```
-Camera Frame ──→ processor.process_frame() ──→ warped_board ──→ detector.update_frame()
-                  (board_process_en_new.py)                      (move_detect.py)
-                  
-                  ảnh camera thô → ảnh 64 ô phẳng → cập nhật curr_img của detector
-```
-
-#### Bước 2b: Chuẩn Bị 4 Cửa Sổ Hiển Thị
+#### Bước 2c: Chuẩn Bị 4 Cửa Sổ Hiển Thị
 
 ```python
 # === CỬA SỔ 1: Camera + Bounding Box ===
-camera_display = frame.copy()
+# [P3] Không cần frame.copy() — cv2.resize tạo ảnh mới
+orig_h, orig_w = frame.shape[:2]
 if processor.last_board_contour is not None:
-    camera_display = draw_board_outline(camera_display, processor.last_board_contour)
-# processor.last_board_contour ← set bởi get_board_contour_auto() mỗi frame
-# → Vẽ hình chữ nhật xanh bao quanh bàn cờ
-
-# === CỬA SỔ 2: Warped Board + Grid ===
-if last_warped_board is not None:
-    warped_display = detector.draw_grid(last_warped_board)
-    # ┌──────────────────────────────────────────────┐
-    # │ BÊN TRONG detector.draw_grid():              │
-    # │  - Vẽ đường dọc (xanh dương) theo v_grid     │
-    # │  - Vẽ đường ngang (xanh lá) theo h_grid      │
-    # │  - Vẽ status text (vàng) góc trái trên       │
-    # │  - Return: ảnh copy có grid overlay            │
-    # └──────────────────────────────────────────────┘
+    # Scale contour tọa độ gốc → display size
+    scale_x = CFG.display_width / orig_w
+    scale_y = CFG.display_height / orig_h
+    scaled_contour = (processor.last_board_contour.astype(np.float64)
+                      * [scale_x, scale_y]).astype(np.int32)
+    camera_display = cv2.resize(frame, (CFG.display_width, CFG.display_height))
+    camera_display = draw_board_outline(camera_display, scaled_contour)
 else:
-    warped_display = np.zeros((500, 500, 3))  # Ảnh đen "No board detected"
+    camera_display = cv2.resize(frame, (CFG.display_width, CFG.display_height))
 
-# === CỬA SỔ 3: Bàn Cờ Ảo (SVG) ===
+# === CỬA SỔ 2: Warped Board + Grid + Preview Arrow ===
+warped_display = detector.draw_grid(last_warped_board)
+# → Vẽ grid lines + status text + [F2] mũi tên preview
+
+# === CỬA SỔ 3: Bàn Cờ Ảo (Cached) ===
 chess_display = detector.get_visual_board()
-# ┌──────────────────────────────────────────────────────────────┐
-# │ BÊN TRONG detector.get_visual_board():                      │
-# │   return board_to_image(self.board, size=500)                │
-# │                                                                │
-# │   BÊN TRONG board_to_image() (visualizer.py):                 │
-# │     1. chess.svg.board(board, 500)  → SVG string               │
-# │     2. cairosvg.svg2png(svg)       → PNG bytes                 │
-# │     3. np.frombuffer(png)          → numpy array               │
-# │     4. cv2.imdecode(arr)           → OpenCV BGR (500×500×3)    │
-# └──────────────────────────────────────────────────────────────┘
+# [P1] Chỉ render khi FEN thay đổi (cache theo FEN string)
+# [S2] Dùng ChessVisualizer (PNG) thay board_to_image (SVG)
 
 # === CỬA SỔ 4: Diff Heatmap ===
 diff_display = detector.get_diff_image()
-# → Ảnh threshold gần nhất, kênh đỏ highlight
-# → Cập nhật khi confirm_move() → detect_changes() được gọi
 
-# === HIỂN THỊ ===
-cv2.imshow("Camera", camera_display)
-cv2.imshow("Warped Board + Grid", warped_display)
-cv2.imshow("Chess Visual", chess_display)
-cv2.imshow("Diff Detection", diff_display)
+# Hiển thị trạng thái AUTO/FLIP
+if CFG.auto_detect_enabled:
+    cv2.putText(camera_display, "AUTO", ...)  # Góc phải trên
+if detector.flip_board:
+    cv2.putText(camera_display, "FLIP", ...)  # Dưới AUTO
 ```
 
 **4 cửa sổ và nguồn dữ liệu**:
 ```
-┌─────────────────┐  ┌─────────────────┐
-│ 1. Camera       │  │ 2. Warped+Grid  │
-│   Nguồn: frame  │  │   Nguồn:        │
-│   + processor.  │  │   warped_board   │
-│   last_board_   │  │   + detector.    │
-│   contour       │  │   draw_grid()    │
-├─────────────────┤  ├─────────────────┤
-│ 3. Chess Visual │  │ 4. Diff         │
-│   Nguồn:        │  │   Nguồn:        │
-│   detector.     │  │   detector.     │
-│   get_visual_   │  │   get_diff_     │
-│   board()       │  │   image()       │
-│   → visualizer. │  │                 │
-│   board_to_     │  │                 │
-│   image()       │  │                 │
-└─────────────────┘  └─────────────────┘
+┌─────────────────┐  ┌─────────────────────┐
+│ 1. Camera       │  │ 2. Warped+Grid      │
+│   + bounding box│  │   + [F2] mũi tên    │
+│   + FPS         │  │   + status text     │
+│   + AUTO/FLIP   │  │                     │
+├─────────────────┤  ├─────────────────────┤
+│ 3. Chess Visual │  │ 4. Diff             │
+│   [P1] cached   │  │   Heatmap đỏ       │
+│   [S2] PNG      │  │                     │
+│   [F3] flip     │  │                     │
+│   highlight move│  │                     │
+└─────────────────┘  └─────────────────────┘
 ```
 
 ---
 
 ### Giai đoạn 3: Xử Lý Phím Bấm
 
-#### Phím `'i'` — Init / Calibrate (→ `move_detect.py`)
+#### Phím `'i'` — Init / Calibrate
 
 ```python
-elif key == ord('i'):
-    if last_warped_board is not None:
-        detector.set_reference_frame(last_warped_board)
-        # ┌──────────────────────────────────────────────────────┐
-        # │ BÊN TRONG detector.set_reference_frame():           │
-        # │                                                        │
-        # │  1. calibrate_grid_from_hough(img)                     │
-        # │     → Canny(50,150) → HoughLines(thresh=110)           │
-        # │     → Phân loại H/V → _cluster_lines()                 │
-        # │     → h_grid, v_grid = 9 đường kẻ chính xác            │
-        # │                                                        │
-        # │  2. ref_img = prev_img = curr_img = img.copy()          │
-        # │     → Đặt mốc so sánh ban đầu                          │
-        # └──────────────────────────────────────────────────────┘
-        print(f"FEN: {detector.board.fen()}")
+detector.set_reference_frame(last_warped_board)
+# → calibrate_grid_from_hough() → grid Hough chính xác
+# → _hough_calibrated = True → L5 bảo vệ
 ```
 
-#### Phím `Space` — Confirm Move (→ `move_detect.py`)
+#### Phím `Space` — Confirm Move
 
 ```python
-elif key == ord(' '):
-    if last_warped_board is not None:
-        move = detector.confirm_move()
-        # ┌──────────────────────────────────────────────────────────┐
-        # │ BÊN TRONG detector.confirm_move():                       │
-        # │                                                            │
-        # │  1. detect_changes(prev_img, curr_img)                     │
-        # │     → _prepare_diff(): Grayscale → Blur → absdiff → thresh│
-        # │     → Chia 64 ô theo h_grid/v_grid                        │
-        # │     → Đếm pixel thay đổi > 100 → sort by intensity        │
-        # │     → Trả về: [e2, e4, ...] (các ô thay đổi)              │
-        # │                                                            │
-        # │  2. infer_move(changes, scores)                            │
-        # │     → Top 4 ô → match vs board.legal_moves                │
-        # │     → Trả về: chess.Move hoặc None                        │
-        # │                                                            │
-        # │  3. Nếu thành công:                                        │
-        # │     → board.san(move) → "e4"                               │
-        # │     → board.push(move) → cập nhật trạng thái board         │
-        # │     → node.add_variation(move) → cập nhật PGN tree         │
-        # │     → prev_img = curr_img → mốc so sánh MỚI               │
-        # │     → get_pgn_string() → in PGN ra terminal                │
-        # │                                                            │
-        # │  Return: chess.Move hoặc None                               │
-        # └──────────────────────────────────────────────────────────┘
-        if move:
-            print(f"FEN: {detector.board.fen()}")
+move = detector.confirm_move()
+# → [Bug9] check game over đầu + cuối
+# → detect_changes() với [L3] ngưỡng động
+# → infer_move() với [L4] queen promotion
+# → push + update PGN
 ```
 
-#### Phím `'r'` — Undo (→ `move_detect.py`)
+#### Phím `'r'` — Undo
 
 ```python
-elif key == ord('r'):
-    detector.undo()
-    # ┌──────────────────────────────────────┐
-    # │ BÊN TRONG detector.undo():          │
-    # │  board.pop()      → hoàn tác board   │
-    # │  _rebuild_game()  → tạo lại PGN tree │
-    # └──────────────────────────────────────┘
-    print(f"FEN: {detector.board.fen()}")
+detector.undo()
+# → board.pop() + rebuild PGN
+# → prev_img = curr_img → tránh desync
+# → cache invalidated
+```
+
+#### Phím `'f'` — Flip Board [F3 MỚI]
+
+```python
+detector.flip_board = not detector.flip_board
+detector._cached_fen = None  # Invalidate cache để render lại
+# → Đổi: White ở dưới ↔ Black ở dưới
+# → Ảnh hưởng: visual board + detect_changes mapping + preview
+```
+
+#### Phím `'a'` — Toggle Auto-detect [F1 MỚI]
+
+```python
+CFG.auto_detect_enabled = not CFG.auto_detect_enabled
+# → ON: hệ thống tự động confirm move khi phát hiện thay đổi ổn định
+# → OFF: user phải nhấn Space thủ công (mặc định TẮT)
 ```
 
 #### Phím `'q'` — Quit & Save
 
 ```python
-elif key == ord('q'):
-    pgn_filename = f"game_{int(current_time)}.pgn"
-    save_pgn(detector.game, pgn_filename)
-    # detector.game → PGN tree đầy đủ
-    # Tên file: game_1711378800.pgn (timestamp)
-    break
-```
-
----
-
-### Giai đoạn 4: Cleanup
-
-```python
-cap.release()           # Giải phóng camera/video
-cv2.destroyAllWindows()  # Đóng tất cả cửa sổ OpenCV
+save_pgn(detector.game, f"game_{int(current_time)}.pgn")
+break
 ```
 
 ---
 
 ## Tóm Tắt: main.py Gọi Gì Từ Module Nào
 
-| Hành động | Module | Hàm gọi | Dữ liệu trả về |
+| Hành động | Module | Hàm gọi | Thay đổi |
 |---|---|---|---|
-| Detect bàn cờ | `board_process_en_new` | `processor.process_frame(frame)` | Ảnh warped hoặc None |
-| Lấy contour | `board_process_en_new` | `processor.last_board_contour` | numpy (4,1,2) |
-| Cập nhật frame | `move_detect` | `detector.update_frame(warped)` | — |
+| Detect bàn cờ | `board_process_en_new` | `processor.process_frame(frame)` | + EMA, frame skip |
+| Lấy contour | `board_process_en_new` | `processor.last_board_contour` | — |
+| Cập nhật frame | `move_detect` | `detector.update_frame(warped)` | + [L5] grid protection |
+| Preview move | `move_detect` | `detector.update_preview()` | [F2 MỚI] |
+| Auto-detect | `move_detect` | `detector.check_auto_detect()` | [F1 MỚI] |
 | Calibrate grid | `move_detect` | `detector.set_reference_frame(warped)` | — |
-| Xác nhận nước đi | `move_detect` | `detector.confirm_move()` | chess.Move / None |
-| Hoàn tác | `move_detect` | `detector.undo()` | — |
-| Vẽ grid lên warped | `move_detect` | `detector.draw_grid(warped)` | Ảnh có grid |
-| Render bàn cờ ảo | `move_detect` → `visualizer` | `detector.get_visual_board()` | Ảnh SVG 500×500 |
-| Diff heatmap | `move_detect` | `detector.get_diff_image()` | Ảnh BGR |
-| Lưu PGN | `move_detect` | `detector.game` (thuộc tính) | chess.pgn.Game |
+| Xác nhận nước đi | `move_detect` | `detector.confirm_move()` | + game over, promotion |
+| Hoàn tác | `move_detect` | `detector.undo()` | + cache invalidate |
+| Vẽ grid + arrow | `move_detect` | `detector.draw_grid(warped)` | + [F2] preview arrow |
+| Render bàn cờ ảo | `move_detect` → `visualizer` | `detector.get_visual_board()` | [P1] cached, [S2] PNG |
+| Diff heatmap | `move_detect` | `detector.get_diff_image()` | — |
+| Lưu PGN | `move_detect` | `detector.game` | — |
+| Flip board | `move_detect` | `detector.flip_board` | [F3 MỚI] |
+| Toggle auto | `config` | `CFG.auto_detect_enabled` | [F1 MỚI] |
 
-> **`chessboard_processor.py` KHÔNG được dùng trong `main.py`**. File đó là module xử lý ảnh tĩnh riêng biệt (dùng Hough + SciPy clustering), chạy độc lập.
+---
+
+## Phím Tắt
+
+| Phím | Chức năng | Module |
+|---|---|---|
+| `i` | Calibrate — set reference frame | `move_detect` |
+| `SPACE` | Xác nhận nước đi | `move_detect` |
+| `r` | Undo nước đi cuối | `move_detect` |
+| `q` | Thoát + save PGN | `main` |
+| **`f`** | 🆕 Flip board | `move_detect` |
+| **`a`** | 🆕 Toggle auto-detect | `config` |
