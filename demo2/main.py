@@ -1,18 +1,15 @@
 import cv2
 import numpy as np
-import sys
 from board_process_en_new import ChessBoardProcessor
 from move_detect import MoveDetector
-from config import CFG
 import time
-
+import os
 
 def draw_board_outline(frame, board_contour):
     """Draw detected board outline on camera frame."""
     if board_contour is not None:
         cv2.drawContours(frame, [board_contour], 0, (0, 255, 0), 3)
     return frame
-
 
 def save_pgn(game, filename="game.pgn"):
     """Save game to PGN file."""
@@ -23,183 +20,135 @@ def save_pgn(game, filename="game.pgn"):
     except Exception as e:
         print(f"❌ Failed to save PGN: {e}")
 
-def draw_diff_grid(image):
-    """
-    Draw 8x8 grid on image
-    Args:
-        image: input image (numpy array)
-    Returns:
-        image with grid
-    """
-    img = image.copy()
-    h, w = img.shape[:2]
-
-    # kích thước mỗi ô
-    cell_h = h / 8
-    cell_w = w / 8
-
-    color = (255, 255, 255)  # trắng (BGR)
-    thickness = 2
-
-    # vẽ đường ngang
-    for i in range(9):
-        y = int(i * cell_h)
-        cv2.line(img, (0, y), (w, y), color, thickness)
-
-    # vẽ đường dọc
-    for j in range(9):
-        x = int(j * cell_w)
-        cv2.line(img, (x, 0), (x, h), color, thickness)
-
-    return img
 
 def main():
     # ==========================================
     # INITIALIZE COMPONENTS
     # ==========================================
-    path = sys.argv[1] if len(sys.argv) > 1 else 0
+    
+    path = r"E:\Python_Project\chessboard_move.mp4"
+    orientation = 0  # 0, 1, 2, 3 tương ứng 0°, 90°, 180°, 270°
+    
 
-    # path = r"E:\Python_Project\chessboard_move.mp4"
-
-
-    cap = cv2.VideoCapture(path)
-
+    cap = cv2.VideoCapture(0)
+    
     if not cap.isOpened():
-        print(f"❌ Cannot open video source: {path}")
+        print("❌ Cannot open camera")
         return
-
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CFG.display_width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CFG.display_height)
-
+    
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    
     processor = ChessBoardProcessor()
     detector = MoveDetector()
-
+    
     # Frame rate control
-    start_time = time.time()
+    frame_time = 1.0 / 30  # 30 FPS target
+    last_time = 0
     frame_count = 0
-    last_warped_board = None
-    retry_count = 0  # [S3] Camera retry counter
-
+    last_warped_board = None  # Store last processed board
+    
     print("=" * 50)
     print("🎮 CHESS BOARD DETECTION & MOVE TRACKING")
     print("=" * 50)
     print("Controls:")
-    print("  'i'     : Set reference frame for calibration")
+    print("  'i' : Set reference frame for calibration")
     print("  'SPACE' : Confirm detected move")
-    print("  'r'     : Undo last move")
-    print("  'f'     : Flip board (đổi trắng/đen)")
-    print("  'a'     : Toggle auto-detect mode")
-    print("  'q'     : Quit and save game")
+    print("  'r' : Undo last move")
+    print("  'q' : Quit and save game")
     print("=" * 50)
     print()
-
+    
     while True:
         current_time = time.time()
-        frame_count += 1
+        
+        # # Frame rate control
+        # if current_time - last_time < frame_time:
+        #     time.sleep(0.1)
+        #     continue
+        
+        # last_time = current_time
+        # frame_count += 1
 
+        # Hãy dùng waitKey linh hoạt:
+        delay = int(max(1, (frame_time - (current_time - last_time)) * 1000))
+        # key = cv2.waitKey(delay) & 0xFF
+        
         # ==========================================
         # READ FRAME FROM CAMERA
         # ==========================================
         ret, frame = cap.read()
-
-        # [S3] Error handling với retry
+        
         if not ret:
-            retry_count += 1
-            if retry_count > CFG.camera_retry_limit:
-                print("❌ Camera disconnected")
-                save_pgn(detector.game, f"game_{int(current_time)}.pgn")
-                break
-            continue
-        retry_count = 0
-
+            print("❌ Failed to read frame from camera")
+            break
+        
+        # frame = rotate_frame(frame, orientation)
         # frame = cv2.flip(frame, -1)  # Mirror image for better user experience
-
         # ==========================================
         # PROCESS BOARD (DETECT + WARP)
         # ==========================================
+        # We need to modify ChessBoardProcessor to return both warped board and contour
+        # For now, let's process and store the board
         warped_board = processor.process_frame(frame)
-
+        
         if warped_board is not None:
             last_warped_board = warped_board.copy()
+            
+            # Update detector with new frame
             detector.update_frame(warped_board)
-
-            # [F2] Cập nhật preview move (mũi tên trên warped board)
-            detector.update_preview()
-
-            # [F1] Auto-detect: tự động confirm khi ổn định
-            if detector.check_auto_detect():
-                move = detector.confirm_move()
-                if move:
-                    print(f"Auto-detected: {move.uci()}")
-                    print(f"FEN: {detector.board.fen()}")
-
+        
         # ==========================================
         # GET VISUAL OUTPUTS
         # ==========================================
         # 1. Camera with board outline
-        # [P3] Không cần copy() — resize tạo ảnh mới
-        orig_h, orig_w = frame.shape[:2]
-        display_w, display_h = CFG.display_width, CFG.display_height
+        camera_display = cv2.resize(frame.copy(), (640, 480))
         if processor.last_board_contour is not None:
-            scale_x = display_w / orig_w
-            scale_y = display_h / orig_h
-            scaled_contour = (processor.last_board_contour.astype(np.float64) * [scale_x, scale_y]).astype(np.int32)
-            camera_display = cv2.resize(frame, (display_w, display_h))
-            camera_display = draw_board_outline(camera_display, scaled_contour)
-        else:
-            camera_display = cv2.resize(frame, (display_w, display_h))
-
-        # 2. Warped board with grid overlay + preview arrow
+            camera_display = draw_board_outline(camera_display, processor.last_board_contour)
+        
+        # 2. Warped board with grid overlay
         if last_warped_board is not None:
             warped_display = detector.draw_grid(last_warped_board)
         else:
             warped_display = np.zeros((500, 500, 3), dtype=np.uint8)
             cv2.putText(warped_display, "No board detected", (100, 250),
                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-
-        # 3. Chess visual board (cached — P1)
+        
+        # 3. Chess visual board
         chess_display = detector.get_visual_board()
-
+        
         # 4. Diff image (change detection)
         diff_display = detector.get_diff_image()
-
-        # Add info text
-        elapsed = current_time - start_time
-        fps = max(1, int(frame_count / max(1, elapsed)))
+        
+        # Add info text to displays
+        fps = max(1, int(frame_count / max(1, current_time - last_time)))
         cv2.putText(camera_display, f"FPS: {fps}", (10, 30),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        # cv2.putText(warped_display, f"Board: {detector.board}", (5, 30),
+        #            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
         cv2.putText(chess_display, f"Moves: {len(detector.board.move_stack)}", (5, 30),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-
-        # Hiển thị trạng thái auto-detect
-        if CFG.auto_detect_enabled:
-            cv2.putText(camera_display, "AUTO", (display_w - 80, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2)
-
-        # Hiển thị flip status
-        if detector.flip_board:
-            cv2.putText(camera_display, "FLIP", (display_w - 80, 60),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 100, 100), 2)
-
+        
         # ==========================================
         # DISPLAY WINDOWS
         # ==========================================
         cv2.imshow("Camera", camera_display)
         cv2.imshow("Warped Board + Grid", warped_display)
         cv2.imshow("Chess Visual", chess_display)
-        cv2.imshow("Diff Detection", draw_diff_grid(diff_display))
-
+        cv2.imshow("Diff Detection", diff_display)
+        
         # ==========================================
         # KEYBOARD CONTROLS
         # ==========================================
-        key = cv2.waitKey(1) & 0xFF
-
+        key = cv2.waitKey(1) & 0xFF # 
+        
         if key == ord('q'):
             print("\n🛑 Quitting...")
+            # Save game before exit
             pgn_filename = f"game_{int(current_time)}.pgn"
             save_pgn(detector.game, pgn_filename)
             break
-
+        
         elif key == ord('i'):
             # Calibrate - set reference frame
             if last_warped_board is not None:
@@ -207,7 +156,7 @@ def main():
                 print(f"FEN: {detector.board.fen()}")
             else:
                 print("⚠️ No board detected yet")
-
+        
         elif key == ord(' '):
             # Confirm move
             if last_warped_board is not None:
@@ -216,25 +165,12 @@ def main():
                     print(f"FEN: {detector.board.fen()}")
             else:
                 print("⚠️ No board detected")
-
+        
         elif key == ord('r'):
             # Undo move
             detector.undo()
             print(f"FEN: {detector.board.fen()}")
-
-        elif key == ord('f'):
-            # [F3] Flip board
-            detector.flip_board = not detector.flip_board
-            detector._cached_fen = None  # Invalidate cache để render lại
-            mode = "Black ở dưới" if detector.flip_board else "White ở dưới"
-            print(f"🔄 Board flipped: {mode}")
-
-        elif key == ord('a'):
-            # [F1] Toggle auto-detect
-            CFG.auto_detect_enabled = not CFG.auto_detect_enabled
-            status = "ON" if CFG.auto_detect_enabled else "OFF"
-            print(f"🤖 Auto-detect: {status}")
-
+    
     # ==========================================
     # CLEANUP
     # ==========================================
@@ -242,6 +178,6 @@ def main():
     cv2.destroyAllWindows()
     print("✅ Done!")
 
-
 if __name__ == "__main__":
+    os.remove(r"E:\Python_Project\Realsense\test\inner_pts.npy")
     main()
